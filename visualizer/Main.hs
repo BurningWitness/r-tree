@@ -19,10 +19,9 @@
 
 module Main where
 
-import           Data.RTree.Double.Strict (RTree, MBR)
-import qualified Data.RTree.Double.Strict as R
-import           Data.RTree.Double.Strict.Debug
-import qualified Data.RTree.Double.Strict.Unsafe as R
+import           Data.RTree.D2.Double (RTree, MBR)
+import qualified Data.RTree.D2.Double as R
+import qualified Data.RTree.D2.Double.Unsafe as R
 
 import           Control.Concurrent
 import           Control.Exception
@@ -30,7 +29,6 @@ import           Control.Monad
 import qualified Data.ByteString.Char8 as BSC
 import           Data.ByteString.Internal (ByteString (..))
 import           Data.ByteString.Unsafe
-import           Data.Colour
 import           Data.Colour.Names
 import           Data.Colour.SRGB
 import           Data.Colour.RGBSpace.HSV
@@ -401,7 +399,7 @@ mbr (R.UnsafeMBR xmin ymin xmax ymax) rgb =
      ]
 
 visualize :: Mode -> RTree a -> [Point]
-visualize mode (R.Root r) = visual 0 r
+visualize mode = visual 0
   where
     wash i
       | i <= 0    = hsv (modeHue mode) 1 1
@@ -432,8 +430,8 @@ visualize mode (R.Root r) = visual 0 r
            R.Leaf4 ba _ bb _ bc _ bd _ ->
              mbr ba (toSRGB white) <> mbr bb (toSRGB white) <> mbr bc (toSRGB white) <> mbr bd (toSRGB white)
 
-visualize _    (R.Leaf1 ba _) = mbr ba (toSRGB white)
-visualize _     R.Empty       = []
+           R.Leaf1 ba _                -> mbr ba (toSRGB white)
+           R.Empty                     -> []
 
 
 draw :: State -> IO ()
