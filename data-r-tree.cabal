@@ -1,10 +1,9 @@
 cabal-version: 2.2
 
 name:                   data-r-tree
-version:                1.1.0
-synopsis:               Two-dimensional R-trees.
-description:            Two-dimensional spatial trees utilizing R-tree and R*-tree
-                        algorithms.
+version:                1.2.0
+synopsis:               R/R*-trees.
+description:            Spatial trees utilizing R-tree and R*-tree algorithms.
 
 license:                MIT
 license-file:           LICENSE
@@ -32,15 +31,15 @@ library
 
   hs-source-dirs:       src
 
-  exposed-modules:      Data.RTree.Double.Strict
-                        Data.RTree.Double.Strict.Debug
-                        Data.RTree.Double.Strict.Unsafe
-                        Data.RTree.Float.Strict
-                        Data.RTree.Float.Strict.Debug
-                        Data.RTree.Float.Strict.Unsafe
+  exposed-modules:      Data.RTree.D2.Double
+                        Data.RTree.D2.Double.Debug
+                        Data.RTree.D2.Double.Unsafe
+                        Data.RTree.D2.Float
+                        Data.RTree.D2.Float.Debug
+                        Data.RTree.D2.Float.Unsafe
 
-  other-modules:        Data.RTree.Double.Strict.Internal
-                        Data.RTree.Float.Strict.Internal
+  other-modules:        Data.RTree.D2.Double.Internal
+                        Data.RTree.D2.Float.Internal
 
   ghc-options:          -Wall
 

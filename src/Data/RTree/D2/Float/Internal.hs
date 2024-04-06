@@ -1,9 +1,10 @@
 {-# LANGUAGE BangPatterns
            , PatternSynonyms
            , RankNTypes
-           , ViewPatterns #-}
+           , ViewPatterns
+           , UnboxedTuples #-}
 
-module Data.RTree.Float.Strict.Internal
+module Data.RTree.D2.Float.Internal
   ( MBR (UnsafeMBR, MBR)
   , validMBR
   , eqMBR
@@ -25,35 +26,37 @@ module Data.RTree.Float.Strict.Internal
   , containedBy
   , containedBy'
 
-  , Node (..)
   , RTree (..)
 
-  , Data.RTree.Float.Strict.Internal.map
+  , Data.RTree.D2.Float.Internal.null
+  , Data.RTree.D2.Float.Internal.size
+
+  , Data.RTree.D2.Float.Internal.map
   , map'
   , mapWithKey
   , mapWithKey'
-  , mapRangeWithKey
-  , mapRangeWithKey'
+  , adjustRangeWithKey
+  , adjustRangeWithKey'
 
-  , Data.RTree.Float.Strict.Internal.foldl
-  , Data.RTree.Float.Strict.Internal.foldl'
+  , Data.RTree.D2.Float.Internal.foldl
+  , Data.RTree.D2.Float.Internal.foldl'
   , foldlWithKey
   , foldlWithKey'
   , foldlRangeWithKey
   , foldlRangeWithKey'
 
-  , Data.RTree.Float.Strict.Internal.foldr
-  , Data.RTree.Float.Strict.Internal.foldr'
+  , Data.RTree.D2.Float.Internal.foldr
+  , Data.RTree.D2.Float.Internal.foldr'
   , foldrWithKey
   , foldrWithKey'
   , foldrRangeWithKey
   , foldrRangeWithKey'
 
-  , Data.RTree.Float.Strict.Internal.foldMap
+  , Data.RTree.D2.Float.Internal.foldMap
   , foldMapWithKey
   , foldMapRangeWithKey
 
-  , Data.RTree.Float.Strict.Internal.traverse
+  , Data.RTree.D2.Float.Internal.traverse
   , traverseWithKey
   , traverseRangeWithKey
 
@@ -73,6 +76,7 @@ import           Data.Functor.Classes
 import           Data.Function
 import qualified Data.List as List
 import           Data.List.NonEmpty (NonEmpty (..), (<|))
+import           Text.Show
 
 
 
@@ -81,7 +85,7 @@ import           Data.List.NonEmpty (NonEmpty (..), (<|))
 --   bounded and closed (i.e. \( [a, b] \)), or infinity (i.e. \((\pm \infty, b]\)).
 --
 --   Degenerate intervals (i.e. \([a,a]\)) are permitted.
-data MBR = -- | Invariants: \( x_{min} \le x_{max}, y_{min} \le y_{max} \)
+data MBR = -- | Invariants: \( x_{min} \le x_{max}, y_{min} \le y_{max} \).
            UnsafeMBR
              {-# UNPACK #-} !Float -- ^ \( x_{min} \)
              {-# UNPACK #-} !Float -- ^ \( y_{min} \)
@@ -89,7 +93,9 @@ data MBR = -- | Invariants: \( x_{min} \le x_{max}, y_{min} \le y_{max} \)
              {-# UNPACK #-} !Float -- ^ \( y_{max} \)
 
 {-# COMPLETE MBR #-}
--- | This is a safe constructor. See 'UnsafeMBR' for a no-frills version.
+-- | Reorders coordinates to fit internal invariants.
+--
+--   Pattern matching guarantees \( x_{0} \le x_{1}, y_{0} \le y_{1} \).
 pattern MBR
   :: Float -- ^ \( x_0 \)
   -> Float -- ^ \( y_0 \)
@@ -99,11 +105,11 @@ pattern MBR
 pattern MBR xmin ymin xmax ymax <- UnsafeMBR xmin ymin xmax ymax
   where
     MBR x0 y0 x1 y1 =
-      let (xmin, xmax) | x0 <= x1  = (x0, x1)
-                       | otherwise = (x1, x0)
+      let !(# xmin, xmax #) | x0 <= x1  = (# x0, x1 #)
+                            | otherwise = (# x1, x0 #)
 
-          (ymin, ymax) | y0 <= y1  = (y0, y1)
-                       | otherwise = (y1, y0)
+          !(# ymin, ymax #) | y0 <= y1  = (# y0, y1 #)
+                            | otherwise = (# y1, y0 #)
 
       in UnsafeMBR xmin ymin xmax ymax
 
@@ -119,7 +125,7 @@ instance Eq MBR where
 
 
 
--- | Check whether lower endpoints are smaller or equal to the upper ones.
+-- | Check whether lower endpoints are smaller or equal to the respective upper ones.
 validMBR :: MBR -> Bool
 validMBR (MBR xmin ymin xmax ymax) = xmin <= xmax && ymin <= ymax
 
@@ -223,50 +229,45 @@ data Predicate = Predicate
                    (MBR -> Bool) -- ^ Matches nodes
                    (MBR -> Bool) -- ^ Matches leaves
 
-{-# INLINEABLE equals #-}
+{-# INLINE equals #-}
 -- | Matches exactly the provided t'MBR'.
 equals :: MBR -> Predicate
 equals bx = Predicate (\ba -> containsMBR ba bx) (eqMBR bx)
 
-{-# INLINEABLE intersects #-}
+{-# INLINE intersects #-}
 -- | Matches any t'MBR' that intersects the provided one.
 intersects:: MBR -> Predicate
 intersects bx = Predicate (intersectsMBR bx) (intersectsMBR bx)
 
-{-# INLINEABLE intersects' #-}
+{-# INLINE intersects' #-}
 -- | Matches any t'MBR' that intersects the provided one, if the
 --   intersection is not a line or a point.
 intersects' :: MBR -> Predicate
 intersects' bx = Predicate (intersectsMBR' bx) (intersectsMBR' bx)
 
-{-# INLINEABLE contains #-}
+{-# INLINE contains #-}
 -- | Matches any t'MBR' that contains the provided one.
 contains :: MBR -> Predicate
 contains bx = Predicate (\ba -> containsMBR ba bx) (\ba -> containsMBR ba bx)
 
-{-# INLINEABLE contains' #-}
+{-# INLINE contains' #-}
 -- | Matches any t'MBR' that contains the provided one,
 --   excluding ones that touch it on one or more sides.
 contains' :: MBR -> Predicate
 contains' bx = Predicate (\ba -> containsMBR ba bx) (\ba -> containsMBR' ba bx)
 
-{-# INLINEABLE containedBy #-}
--- | Matches any t'MBR' that is fully contained within the provided one.
+{-# INLINE containedBy #-}
+-- | Matches any t'MBR' that is contained within the provided one.
 containedBy :: MBR -> Predicate
 containedBy bx = Predicate (intersectsMBR bx) (containsMBR bx)
 
-{-# INLINEABLE containedBy' #-}
--- | Matches any t'MBR' that is fully contained within the provided one,
+{-# INLINE containedBy' #-}
+-- | Matches any t'MBR' that is contained within the provided one,
 --   excluding ones that touch it on one or more sides.
 containedBy' :: MBR -> Predicate
 containedBy' bx = Predicate (intersectsMBR bx) (containsMBR' bx)
 
 
-
--- | Two-dimensional spatial tree.
-data RTree a = Root {-# UNPACK #-} !(Node a)
-             | Leaf1 {-# UNPACK #-} !MBR a
-             | Empty
 
 instance Show a => Show (RTree a) where
   showsPrec = liftShowsPrec showsPrec showList
@@ -274,81 +275,14 @@ instance Show a => Show (RTree a) where
 instance Show1 RTree where
   liftShowsPrec showsPrec_ showList_ t r =
     showParen (t > 10) $
-        showString "fromList ["
-      . case r of
-          Root n     -> let ~(en, tn) = go n
-                        in en . showChar ',' . tn
-
-          Leaf1 ba a -> leaf ba a
-          Empty      -> id
-
-      . showChar ']'
-
-    where
-      {-# INLINE leaf #-}
-      leaf ba a = liftShowsPrec showsPrec_ showList_ 11 (ba, a)
-
-      {-# NOINLINE go #-}
-      go n =
-        case n of
-          Node2 _ a _ b           ->
-            let ~(ea, ta) = go a
-                ~(eb, tb) = go b
-
-            in (ea, ta . showChar ',' . eb . showChar ',' . tb)
-
-          Node3 _ a _ b _ c      ->
-            let ~(ea, ta) = go a
-                ~(eb, tb) = go b
-                ~(ec, tc) = go c
-
-            in ( ea
-               , ta . showChar ',' . eb . showChar ',' . tb . showChar ','
-                                   . ec . showChar ',' . tc
-               )
-
-          Node4 _ a _ b _ c _ d ->
-            let ~(ea, ta) = go a
-                ~(eb, tb) = go b
-                ~(ec, tc) = go c
-                ~(ed, td) = go d
-
-            in ( ea
-               , ta . showChar ',' . eb . showChar ',' . tb . showChar ','
-                                   . ec . showChar ',' . tc . showChar ','
-                                   . ed . showChar ',' . td
-               )
-
-          Leaf2 ba a bb b           ->
-            (leaf ba a, leaf bb b)
-
-          Leaf3 ba a bb b bc c      ->
-            (leaf ba a, leaf bb b . showChar ',' . leaf bc c)
-
-          Leaf4 ba a bb b bc c bd d ->
-            (leaf ba a, leaf bb b . showChar ',' . leaf bc c . showChar ',' . leaf bd d)
-
+      showListWith (liftShowsPrec showsPrec_ showList_ 0) $
+        foldrWithKey (\k a -> (:) (k, a)) [] r
 
 instance Eq a => Eq (RTree a) where
   (==) = liftEq (==)
 
 instance Eq1 RTree where
-  liftEq f r s =
-    case r of
-      Root n     ->
-        case s of
-          Root m -> go n m
-          _      -> False
-
-      Leaf1 ba a ->
-        case s of
-          Leaf1 bb b -> eqMBR ba bb && f a b
-          _          -> False
-
-      Empty      ->
-        case s of
-          Empty -> True
-          _     -> False
+  liftEq f = go
     where
       {-# INLINE node #-}
       node ba a bb b = eqMBR ba bb && go a b
@@ -356,7 +290,6 @@ instance Eq1 RTree where
       {-# INLINE leaf #-}
       leaf ba a bb b = eqMBR ba bb && f a b
 
-      {-# NOINLINE go #-}
       go m n =
         case m of
           Node2 ba a bb b ->
@@ -393,19 +326,24 @@ instance Eq1 RTree where
 
               _                     -> False
 
+          Leaf1 ba a ->
+            case n of
+              Leaf1 bb b -> eqMBR ba bb && f a b
+              _          -> False
+
+          Empty      ->
+            case n of
+              Empty -> True
+              _     -> False
+
+
 
 instance NFData a => NFData (RTree a) where
   rnf = liftRnf rnf
 
 instance NFData1 RTree where
-  liftRnf f r =
-    case r of
-      Root n    -> go n
-      Leaf1 _ a -> f a
-      Empty     -> ()
-
+  liftRnf f = go
     where
-      {-# NOINLINE go #-}
       go n =
         case n of
           Node2 _ a _ b         -> go a `seq` go b
@@ -416,72 +354,99 @@ instance NFData1 RTree where
           Leaf3 _ a _ b _ c     -> f a `seq` f b `seq` f c
           Leaf4 _ a _ b _ c _ d -> f a `seq` f b `seq` f c `seq` f d
 
+          Leaf1 _ a             -> f a
+          Empty                 -> ()
 
--- | Uses 'Data.RTree.Float.Strict.Internal.map'.
+
+
+-- | Uses 'Data.RTree.D2.Float.Internal.map'.
 instance Functor RTree where
-  fmap = Data.RTree.Float.Strict.Internal.map
+  fmap = Data.RTree.D2.Float.Internal.map
 
 instance Foldable RTree where
-  foldl = Data.RTree.Float.Strict.Internal.foldl
+  foldl = Data.RTree.D2.Float.Internal.foldl
 
-  foldr = Data.RTree.Float.Strict.Internal.foldr
+  foldr = Data.RTree.D2.Float.Internal.foldr
 
-  foldMap = Data.RTree.Float.Strict.Internal.foldMap
+  foldMap = Data.RTree.D2.Float.Internal.foldMap
 
-  foldl' = Data.RTree.Float.Strict.Internal.foldl'
+  foldl' = Data.RTree.D2.Float.Internal.foldl'
 
-  foldr' = Data.RTree.Float.Strict.Internal.foldr'
+  foldr' = Data.RTree.D2.Float.Internal.foldr'
 
-  null Empty = True
-  null _     = False
+  null = Data.RTree.D2.Float.Internal.null
 
-  length r =
-    case r of
-      Root n    -> go n
-      Leaf1 _ _ -> 1
-      Empty     -> 0
-    where
-      {-# NOINLINE go #-}
-      go n =
-        case n of
-          Node2 _ a _ b         -> go a + go b
-          Node3 _ a _ b _ c     -> go a + go b + go c
-          Node4 _ a _ b _ c _ d -> go a + go b + go c + go d
+  length = size
 
-          Leaf2 _ _ _ _         -> 2
-          Leaf3 _ _ _ _ _ _     -> 3
-          Leaf4 _ _ _ _ _ _ _ _ -> 4
 
 instance Traversable RTree where
-  traverse = Data.RTree.Float.Strict.Internal.traverse
+  traverse = Data.RTree.D2.Float.Internal.traverse
 
 
 
--- | Recursive part of the tree.
---
---   Each t'MBR' is tied to the value directly after it.
---
---   Invariant: the t'MBR' of each non-leaf node encloses all the t'MBR's inside the node.
-data Node a = Node2 {-# UNPACK #-} !MBR !(Node a) {-# UNPACK #-} !MBR !(Node a)
-            | Node3 {-# UNPACK #-} !MBR !(Node a) {-# UNPACK #-} !MBR !(Node a) {-# UNPACK #-} !MBR !(Node a)
-            | Node4 {-# UNPACK #-} !MBR !(Node a) {-# UNPACK #-} !MBR !(Node a) {-# UNPACK #-} !MBR !(Node a) {-# UNPACK #-} !MBR !(Node a)
+-- | Spine-strict two-dimensional R-tree.
+data RTree a = Node2 {-# UNPACK #-} !MBR !(RTree a) {-# UNPACK #-} !MBR !(RTree a)
+             | Node3 {-# UNPACK #-} !MBR !(RTree a) {-# UNPACK #-} !MBR !(RTree a) {-# UNPACK #-} !MBR !(RTree a)
+             | Node4 {-# UNPACK #-} !MBR !(RTree a) {-# UNPACK #-} !MBR !(RTree a) {-# UNPACK #-} !MBR !(RTree a) {-# UNPACK #-} !MBR !(RTree a)
 
-            | Leaf2 {-# UNPACK #-} !MBR a {-# UNPACK #-} !MBR a
-            | Leaf3 {-# UNPACK #-} !MBR a {-# UNPACK #-} !MBR a {-# UNPACK #-} !MBR a
-            | Leaf4 {-# UNPACK #-} !MBR a {-# UNPACK #-} !MBR a {-# UNPACK #-} !MBR a {-# UNPACK #-} !MBR a
+             | Leaf2 {-# UNPACK #-} !MBR a {-# UNPACK #-} !MBR a
+             | Leaf3 {-# UNPACK #-} !MBR a {-# UNPACK #-} !MBR a {-# UNPACK #-} !MBR a
+             | Leaf4 {-# UNPACK #-} !MBR a {-# UNPACK #-} !MBR a {-# UNPACK #-} !MBR a {-# UNPACK #-} !MBR a
+
+               -- | Invariant: only allowed as the root node.
+             | Leaf1 {-# UNPACK #-} !MBR a
+
+               -- | Invariant: only allowed as the root node.
+             | Empty
 
 
-{-# INLINE map #-}
+
+-- | \(\mathcal{O}(1)\).
+--   Check if the tree is empty.
+null :: RTree a -> Bool
+null Empty = True
+null _     = False
+
+-- | \(\mathcal{O}(n)\).
+--   Calculate the number of elements stored in the tree.
+--   The returned number is guaranteed to be non-negative.
+size :: RTree a -> Int
+size = go
+  where
+    go n =
+      case n of
+        Node2 _ a _ b         -> let !w = go a
+                                     !x = go b
+
+                                 in w + x
+
+        Node3 _ a _ b _ c     -> let !w = go a
+                                     !x = go b
+                                     !y = go c
+
+                                 in w + x + y
+
+        Node4 _ a _ b _ c _ d -> let !w = go a
+                                     !x = go b
+                                     !y = go c
+                                     !z = go d
+
+                                 in w + x + y + z
+
+        Leaf2 _ _ _ _         -> 2
+        Leaf3 _ _ _ _ _ _     -> 3
+        Leaf4 _ _ _ _ _ _ _ _ -> 4
+
+        Leaf1 _ _             -> 1
+        Empty                 -> 0
+
+
+
 -- | \(\mathcal{O}(n)\).
 --   Map a function over all values.
 map :: (a -> b) -> RTree a -> RTree b
-map f r =
-  case r of
-    Root n     -> Root (go n)
-    Leaf1 ba a -> Leaf1 ba (f a)
-    Empty      -> Empty
+map f = go
   where
-    {-# NOINLINE go #-}
     go n =
       case n of
         Node2 ba a bb b           ->
@@ -502,18 +467,16 @@ map f r =
         Leaf4 ba a bb b bc c bd d ->
           Leaf4 ba (f a) bb (f b) bc (f c) bd (f d)
 
-{-# INLINE map' #-}
+        Leaf1 ba a                ->
+          Leaf1 ba (f a)
+
+        Empty                     -> Empty
+
 -- | \(\mathcal{O}(n)\).
 --   Map a function over all values and evaluate the results to WHNF.
 map' :: (a -> b) -> RTree a -> RTree b
-map' f r =
-  case r of
-    Root n     -> Root (go n)
-    Leaf1 ba a -> let a' = f a
-                  in a' `seq` Leaf1 ba a'
-    Empty      -> Empty
+map' f = go
   where
-    {-# NOINLINE go #-}
     go n =
       case n of
         Node2 ba a bb b           ->
@@ -526,37 +489,37 @@ map' f r =
           Node4 ba (go a) bb (go b) bc (go c) bd (go d)
 
         Leaf2 ba a bb b           ->
-          let a' = f a
-              b' = f b
+          let !a' = f a
+              !b' = f b
 
-          in a' `seq` b' `seq` Leaf2 ba a' bb b'
+          in Leaf2 ba a' bb b'
 
         Leaf3 ba a bb b bc c      ->
-          let a' = f a
-              b' = f b
-              c' = f c
+          let !a' = f a
+              !b' = f b
+              !c' = f c
 
-          in a' `seq` b' `seq` c' `seq` Leaf3 ba a' bb b' bc c'
+          in Leaf3 ba a' bb b' bc c'
 
         Leaf4 ba a bb b bc c bd d ->
-          let a' = f a
-              b' = f b
-              c' = f c
-              d' = f d
+          let !a' = f a
+              !b' = f b
+              !c' = f c
+              !d' = f d
 
-          in a' `seq` b' `seq` c' `seq` d' `seq` Leaf4 ba a' bb b' bc c' bd d'
+          in Leaf4 ba a' bb b' bc c' bd d'
 
-{-# INLINE mapWithKey #-}
+        Leaf1 ba a                ->
+          Leaf1 ba $! f a
+        
+        Empty                     -> Empty
+
+
 -- | \(\mathcal{O}(n)\).
 --   Map a function over all t'MBR's and their respective values.
 mapWithKey :: (MBR -> a -> b) -> RTree a -> RTree b
-mapWithKey f r =
-  case r of
-    Root n     -> Root (go n)
-    Leaf1 ba a -> Leaf1 ba (f ba a)
-    Empty      -> Empty
+mapWithKey f = go
   where
-    {-# NOINLINE go #-}
     go n =
       case n of
         Node2 ba a bb b           ->
@@ -577,19 +540,17 @@ mapWithKey f r =
         Leaf4 ba a bb b bc c bd d ->
           Leaf4 ba (f ba a) bb (f bb b) bc (f bc c) bd (f bd d)
 
-{-# INLINE mapWithKey' #-}
+        Leaf1 ba a                ->
+          Leaf1 ba (f ba a)
+
+        Empty                     -> Empty
+
 -- | \(\mathcal{O}(n)\).
 --   Map a function over all t'MBR's and their respective values
 --   and evaluate the results to WHNF.
 mapWithKey' :: (MBR -> a -> b) -> RTree a -> RTree b
-mapWithKey' f r =
-  case r of
-    Root n     -> Root (go n)
-    Leaf1 ba a -> let a' = f ba a
-                  in a' `seq` Leaf1 ba a'
-    Empty      -> Empty
+mapWithKey' f = go
   where
-    {-# NOINLINE go #-}
     go n =
       case n of
         Node2 ba a bb b           ->
@@ -602,35 +563,38 @@ mapWithKey' f r =
           Node4 ba (go a) bb (go b) bc (go c) bd (go d)
 
         Leaf2 ba a bb b           ->
-          let a' = f ba a
-              b' = f bb b
+          let !a' = f ba a
+              !b' = f bb b
 
-          in a' `seq` b' `seq` Leaf2 ba a' bb b'
+          in Leaf2 ba a' bb b'
 
         Leaf3 ba a bb b bc c      ->
-          let a' = f ba a
-              b' = f bb b
-              c' = f bc c
+          let !a' = f ba a
+              !b' = f bb b
+              !c' = f bc c
 
-          in a' `seq` b' `seq` c' `seq` Leaf3 ba a' bb b' bc c'
+          in Leaf3 ba a' bb b' bc c'
 
         Leaf4 ba a bb b bc c bd d ->
-          let a' = f ba a
-              b' = f bb b
-              c' = f bc c
-              d' = f bd d
+          let !a' = f ba a
+              !b' = f bb b
+              !c' = f bc c
+              !d' = f bd d
 
-          in a' `seq` b' `seq` c' `seq` d' `seq` Leaf4 ba a' bb b' bc c' bd d'
+          in Leaf4 ba a' bb b' bc c' bd d'
 
-{-# INLINE mapRangeWithKey #-}
--- | Best-case \(\mathcal{O}(\log n)\), worst-case \(\mathcal{O}(n)\).
+        Leaf1 ba a                ->
+          Leaf1 ba $! f ba a
+
+        Empty                     -> Empty
+
+
+
+{-# INLINE adjustRangeWithKey #-}
+-- | \(\mathcal{O}(r + n_{range})\).
 --   Map a function over t'MBR's that match the 'Predicate' and their respective values.
-mapRangeWithKey :: Predicate -> (MBR -> a -> a) -> RTree a -> RTree a
-mapRangeWithKey (Predicate nodePred leafPred) f r =
-  case r of
-    Root n     -> Root (go n)
-    Leaf1 ba a -> Leaf1 ba (leaf ba a)
-    Empty      -> Empty
+adjustRangeWithKey :: Predicate -> (MBR -> a -> a) -> RTree a -> RTree a
+adjustRangeWithKey (Predicate nodePred leafPred) f = go
   where
     {-# INLINE node #-}
     node bx x
@@ -642,7 +606,6 @@ mapRangeWithKey (Predicate nodePred leafPred) f r =
       | leafPred bx = f bx x
       | otherwise   = x
 
-    {-# NOINLINE go #-}
     go n =
       case n of
         Node2 ba a bb b           ->
@@ -663,27 +626,28 @@ mapRangeWithKey (Predicate nodePred leafPred) f r =
         Leaf4 ba a bb b bc c bd d ->
           Leaf4 ba (leaf ba a) bb (leaf bb b) bc (leaf bc c) bd (leaf bd d)
 
-{-# INLINE mapRangeWithKey' #-}
--- | Best-case \(\mathcal{O}(\log n)\), worst-case \(\mathcal{O}(n)\).
+        Leaf1 ba a                ->
+          Leaf1 ba (leaf ba a)
+
+        Empty                     -> Empty
+
+{-# INLINE adjustRangeWithKey' #-}
+-- | \(\mathcal{O}(r + n_{range})\).
 --   Map a function over t'MBR's that match the 'Predicate' and their respective values
 --   and evaluate the results to WHNF.
-mapRangeWithKey' :: Predicate -> (MBR -> a -> a) -> RTree a -> RTree a
-mapRangeWithKey' (Predicate nodePred leafPred) f r =
-  case r of
-    Root n     -> Root (go n)
-    Leaf1 ba a -> leaf ba a (Leaf1 ba)
-    Empty      -> Empty
+adjustRangeWithKey' :: Predicate -> (MBR -> a -> a) -> RTree a -> RTree a
+adjustRangeWithKey' (Predicate nodePred leafPred) f = go
   where
+    {-# INLINE node #-}
     node bx x
       | nodePred bx = go x
       | otherwise   = x
 
-    leaf bx x g
-      | leafPred bx = let y = f bx x
-                      in y `seq` (g y)
-      | otherwise   = g x
+    {-# INLINE leaf #-}
+    leaf bx x
+      | leafPred bx = f bx x
+      | otherwise   = x
 
-    {-# NOINLINE go #-}
     go n =
       case n of
         Node2 ba a bb b           ->
@@ -696,81 +660,78 @@ mapRangeWithKey' (Predicate nodePred leafPred) f r =
           Node4 ba (node ba a) bb (node bb b) bc (node bc c) bd (node bd d)
 
         Leaf2 ba a bb b           ->
-          leaf ba a $ \a' ->
-            leaf bb b $ \b' ->
-              Leaf2 ba a' bb b'
+          let !a' = leaf ba a
+              !b' = leaf bb b
+
+          in Leaf2 ba a' bb b'
 
         Leaf3 ba a bb b bc c      ->
-          leaf ba a $ \a' ->
-            leaf bb b $ \b' ->
-              leaf bc c $ \c' ->
-                Leaf3 ba a' bb b' bc c'
+          let !a' = leaf ba a
+              !b' = leaf bb b
+              !c' = leaf bc c
+
+          in Leaf3 ba a' bb b' bc c'
 
         Leaf4 ba a bb b bc c bd d ->
-          leaf ba a $ \a' ->
-            leaf bb b $ \b' ->
-              leaf bc c $ \c' ->
-                leaf bd d $ \d' ->
-                  Leaf4 ba a' bb b' bc c' bd d'
+          let !a' = leaf ba a
+              !b' = leaf bb b
+              !c' = leaf bc c
+              !d' = leaf bd d
+
+          in Leaf4 ba a' bb b' bc c' bd d'
+
+        Leaf1 ba a                ->
+          Leaf1 ba $! leaf ba a
+
+        Empty                     -> Empty
 
 
 
-{-# INLINE foldl #-}
--- | \(\mathcal{O}(n)\).
+-- | \(\mathcal{O}(n_R)\).
 --   Fold left-to-right over all values.
 foldl :: (b -> a -> b) -> b -> RTree a -> b
-foldl f z_ r =
-  case r of
-    Root n    -> go z_ n
-    Leaf1 _ a -> f z_ a
-    Empty     -> z_
+foldl f = go
   where
-    {-# NOINLINE go #-}
     go z n =
       case n of
-        Node2 _  a _  b           ->         go (go z a) b
-        Node3 _  a _  b _  c      ->     go (go (go z a) b) c
-        Node4 _  a _  b _  c _  d -> go (go (go (go z a) b) c) d
+        Node2 _ a _ b         ->         go (go z a) b
+        Node3 _ a _ b _ c     ->     go (go (go z a) b) c
+        Node4 _ a _ b _ c _ d -> go (go (go (go z a) b) c) d
 
-        Leaf2 _  a _  b           ->       f (f z a) b
-        Leaf3 _  a _  b _  c      ->    f (f (f z a) b) c
-        Leaf4 _  a _  b _  c _  d -> f (f (f (f z a) b) c) d
+        Leaf2 _ a _ b         ->       f (f z a) b
+        Leaf3 _ a _ b _ c     ->    f (f (f z a) b) c
+        Leaf4 _ a _ b _ c _ d -> f (f (f (f z a) b) c) d
 
-{-# INLINE foldl' #-}
+        Leaf1 _ a             -> f z a
+        Empty                 -> z
+
 -- | \(\mathcal{O}(n)\).
 --   Fold left-to-right over all values, applying the operator function strictly.
 foldl' :: (b -> a -> b) -> b -> RTree a -> b
-foldl' f z_ r =
-  case r of
-    Root n    -> go z_ n
-    Leaf1 _ a -> leaf z_ a
-    Empty     -> z_
+foldl' f = go
   where
     {-# INLINE leaf #-}
-    leaf z x = z `seq` f z x
+    leaf !z x = f z x
 
-    {-# NOINLINE go #-}
-    go z n =
+    go !z n =
       case n of
-        Node2 _  a _  b           ->         go (go z a) b
-        Node3 _  a _  b _  c      ->     go (go (go z a) b) c
-        Node4 _  a _  b _  c _  d -> go (go (go (go z a) b) c) d
+        Node2 _ a _ b         ->         go (go z a) b
+        Node3 _ a _ b _ c     ->     go (go (go z a) b) c
+        Node4 _ a _ b _ c _ d -> go (go (go (go z a) b) c) d
 
-        Leaf2 _  a _  b           ->             leaf (leaf z a) b
-        Leaf3 _  a _  b _  c      ->       leaf (leaf (leaf z a) b) c
-        Leaf4 _  a _  b _  c _  d -> leaf (leaf (leaf (leaf z a) b) c) d
+        Leaf2 _ a _ b         ->             leaf (leaf z a) b
+        Leaf3 _ a _ b _ c     ->       leaf (leaf (leaf z a) b) c
+        Leaf4 _ a _ b _ c _ d -> leaf (leaf (leaf (leaf z a) b) c) d
 
-{-# INLINE foldlWithKey #-}
--- | \(\mathcal{O}(n)\).
+        Leaf1 _ a             -> leaf z a
+        Empty                 -> z
+
+
+-- | \(\mathcal{O}(n_R)\).
 --   Fold left-to-right over all t'MBR's and their respective values.
 foldlWithKey :: (b -> MBR -> a -> b) -> b -> RTree a -> b
-foldlWithKey f z_ r =
-  case r of
-    Root n     -> go z_ n
-    Leaf1 ba a -> f z_ ba a
-    Empty      -> z_
+foldlWithKey f = go
   where
-    {-# NOINLINE go #-}
     go z n =
       case n of
         Node2 _  a _  b           ->         go (go z a) b
@@ -781,21 +742,18 @@ foldlWithKey f z_ r =
         Leaf3 ba a bb b bc c      ->    f (f (f z ba a) bb b) bc c
         Leaf4 ba a bb b bc c bd d -> f (f (f (f z ba a) bb b) bc c) bd d
 
-{-# INLINE foldlWithKey' #-}
+        Leaf1 ba a                -> f z ba a
+        Empty                     -> z
+
 -- | \(\mathcal{O}(n)\).
 --   Fold left-to-right over all t'MBR's and their respective values,
 --   applying the operator function strictly.
 foldlWithKey' :: (b -> MBR -> a -> b) -> b -> RTree a -> b
-foldlWithKey' f z_ r =
-  case r of
-    Root n     -> go z_ n
-    Leaf1 ba a -> leaf z_ ba a
-    Empty      -> z_
+foldlWithKey' f = go
   where
     {-# INLINE leaf #-}
-    leaf z bx x = z `seq` f z bx x
+    leaf !z bx x = f z bx x
 
-    {-# NOINLINE go #-}
     go z n =
       case n of
         Node2 _  a _  b           ->         go (go z a) b
@@ -805,17 +763,17 @@ foldlWithKey' f z_ r =
         Leaf2 ba a bb b           ->             leaf (leaf z ba a) bb b
         Leaf3 ba a bb b bc c      ->       leaf (leaf (leaf z ba a) bb b) bc c
         Leaf4 ba a bb b bc c bd d -> leaf (leaf (leaf (leaf z ba a) bb b) bc c) bd d
+ 
+        Leaf1 ba a                -> leaf z ba a
+        Empty                     -> z
+
 
 {-# INLINE foldlRangeWithKey #-}
--- | Best-case \(\mathcal{O}(\log n)\), worst-case \(\mathcal{O}(n)\).
+-- | \(\mathcal{O}(r + n_{{range}_R})\).
 --   Fold left-to-right over t'MBR's that match the 'Predicate'
 --   and their respective values.
 foldlRangeWithKey :: Predicate -> (b -> MBR -> a -> b) -> b -> RTree a -> b
-foldlRangeWithKey (Predicate nodePred leafPred) f z_ r =
-  case r of
-    Root n     -> go z_ n
-    Leaf1 ba a -> leaf z_ ba a
-    Empty      -> z_
+foldlRangeWithKey (Predicate nodePred leafPred) f = go
   where
     {-# INLINE node #-}
     node z bx x
@@ -827,7 +785,6 @@ foldlRangeWithKey (Predicate nodePred leafPred) f z_ r =
       | leafPred bx = f z bx x
       | otherwise   = z
 
-    {-# NOINLINE go #-}
     go z n =
       case n of
         Node2 ba a bb b           ->             node (node z ba a) bb b
@@ -838,16 +795,15 @@ foldlRangeWithKey (Predicate nodePred leafPred) f z_ r =
         Leaf3 ba a bb b bc c      ->       leaf (leaf (leaf z ba a) bb b) bc c
         Leaf4 ba a bb b bc c bd d -> leaf (leaf (leaf (leaf z ba a) bb b) bc c) bd d
 
+        Leaf1 ba a                -> leaf z ba a
+        Empty                     -> z
+
 {-# INLINE foldlRangeWithKey' #-}
--- | Best-case \(\mathcal{O}(\log n)\), worst-case \(\mathcal{O}(n)\).
+-- | \(\mathcal{O}(r + n_{range})\).
 --   Fold left-to-right over t'MBR's that match the 'Predicate'
 --   and their respective values, applying the operator function strictly.
 foldlRangeWithKey' :: Predicate -> (b -> MBR -> a -> b) -> b -> RTree a -> b
-foldlRangeWithKey' (Predicate nodePred leafPred) f z_ r =
-  case r of
-    Root n     -> go z_ n
-    Leaf1 ba a -> leaf z_ ba a
-    Empty      -> z_
+foldlRangeWithKey' (Predicate nodePred leafPred) f = go
   where
     {-# INLINE node #-}
     node z bx x
@@ -855,11 +811,10 @@ foldlRangeWithKey' (Predicate nodePred leafPred) f z_ r =
       | otherwise   = z
 
     {-# INLINE leaf #-}
-    leaf z bx x
-      | leafPred bx = z `seq` f z bx x
+    leaf !z bx x
+      | leafPred bx = f z bx x
       | otherwise   = z
 
-    {-# NOINLINE go #-}
     go z n =
       case n of
         Node2 ba a bb b           ->             node (node z ba a) bb b
@@ -870,19 +825,16 @@ foldlRangeWithKey' (Predicate nodePred leafPred) f z_ r =
         Leaf3 ba a bb b bc c      ->       leaf (leaf (leaf z ba a) bb b) bc c
         Leaf4 ba a bb b bc c bd d -> leaf (leaf (leaf (leaf z ba a) bb b) bc c) bd d
 
+        Leaf1 ba a                -> leaf z ba a
+        Empty                     -> z
 
 
-{-# INLINE foldr #-}
--- | \(\mathcal{O}(n)\).
+
+-- | \(\mathcal{O}(n_L)\).
 --   Fold right-to-left over all values.
 foldr :: (a -> b -> b) -> b -> RTree a -> b
-foldr f z_ r =
-  case r of
-    Root n    -> go z_ n
-    Leaf1 _ a -> f a z_
-    Empty     -> z_
+foldr f = go
   where
-    {-# NOINLINE go #-}
     go z n =
       case n of
         Node2 _  a _  b           -> go (go         z       b) a
@@ -893,20 +845,17 @@ foldr f z_ r =
         Leaf3 _  a _  b _  c      -> f a (f b (f c      z))
         Leaf4 _  a _  b _  c _  d -> f a (f b (f c (f d z)))
 
-{-# INLINE foldr' #-}
+        Leaf1 _ a                 -> f a z
+        Empty                     -> z
+
 -- | \(\mathcal{O}(n)\).
 --   Fold right-to-left over all values, applying the operator function strictly.
 foldr' :: (a -> b -> b) -> b -> RTree a -> b
-foldr' f z_ r =
-  case r of
-    Root n    -> go z_ n
-    Leaf1 _ a -> leaf a z_
-    Empty     -> z_
+foldr' f = go
   where
     {-# INLINE leaf #-}
-    leaf x z = z `seq` f x z
+    leaf x !z = f x z
 
-    {-# NOINLINE go #-}
     go z n =
       case n of
         Node2 _  a _  b           -> go (go         z       b) a
@@ -917,17 +866,15 @@ foldr' f z_ r =
         Leaf3 _  a _  b _  c      -> leaf a (leaf b (leaf c         z))
         Leaf4 _  a _  b _  c _  d -> leaf a (leaf b (leaf c (leaf d z)))
 
-{-# INLINE foldrWithKey #-}
--- | \(\mathcal{O}(n)\).
+        Leaf1 _ a                 -> leaf a z
+        Empty                     -> z
+
+
+-- | \(\mathcal{O}(n_L)\).
 --   Fold right-to-left over all t'MBR's and their respective values.
 foldrWithKey :: (MBR -> a -> b -> b) -> b -> RTree a -> b
-foldrWithKey f z_ r =
-  case r of
-    Root n     -> go z_ n
-    Leaf1 ba a -> f ba a z_
-    Empty      -> z_
+foldrWithKey f = go
   where
-    {-# NOINLINE go #-}
     go z n =
       case n of
         Node2 _  a _  b           -> go (go         z       b) a
@@ -938,21 +885,18 @@ foldrWithKey f z_ r =
         Leaf3 ba a bb b bc c      -> f ba a (f bb b (f bc c         z))
         Leaf4 ba a bb b bc c bd d -> f ba a (f bb b (f bc c (f bd d z)))
 
-{-# INLINE foldrWithKey' #-}
+        Leaf1 ba a                -> f ba a z
+        Empty                     -> z
+
 -- | \(\mathcal{O}(n)\).
 --   Fold right-to-left over all t'MBR's and their respective values,
 --   applying the operator function strictly.
 foldrWithKey' :: (MBR -> a -> b -> b) -> b -> RTree a -> b
-foldrWithKey' f z_ r =
-  case r of
-    Root n     -> go z_ n
-    Leaf1 ba a -> leaf ba a z_
-    Empty      -> z_
+foldrWithKey' f = go
   where
     {-# INLINE leaf #-}
-    leaf bx x z = z `seq` f bx x z
+    leaf bx x !z = f bx x z
 
-    {-# NOINLINE go #-}
     go z n =
       case n of
         Node2 _  a _  b           -> go (go         z       b) a
@@ -963,16 +907,16 @@ foldrWithKey' f z_ r =
         Leaf3 ba a bb b bc c      -> leaf ba a (leaf bb b (leaf bc c            z))
         Leaf4 ba a bb b bc c bd d -> leaf ba a (leaf bb b (leaf bc c (leaf bd d z)))
 
+        Leaf1 ba a                -> leaf ba a z
+        Empty                     -> z
+
+
 {-# INLINE foldrRangeWithKey #-}
--- | Best-case \(\mathcal{O}(\log n)\), worst-case \(\mathcal{O}(n)\).
+-- | \(\mathcal{O}(r + n_{{range}_L})\).
 --   Fold right-to-left over t'MBR's that match the 'Predicate'
 --   and their respective values.
 foldrRangeWithKey :: Predicate -> (MBR -> a -> b -> b) -> b -> RTree a -> b
-foldrRangeWithKey (Predicate nodePred leafPred) f z_ r =
-  case r of
-    Root n     -> go z_ n
-    Leaf1 ba a -> leaf ba a z_
-    Empty      -> z_
+foldrRangeWithKey (Predicate nodePred leafPred) f = go
   where
     {-# INLINE node #-}
     node z bx x
@@ -984,7 +928,6 @@ foldrRangeWithKey (Predicate nodePred leafPred) f z_ r =
       | leafPred bx = f bx x z
       | otherwise   = z
 
-    {-# NOINLINE go #-}
     go z n =
       case n of
         Node2 ba a bb b           -> node (node             z             bb b) ba a
@@ -995,17 +938,15 @@ foldrRangeWithKey (Predicate nodePred leafPred) f z_ r =
         Leaf3 ba a bb b bc c      -> leaf ba a (leaf bb b (leaf bc c            z))
         Leaf4 ba a bb b bc c bd d -> leaf ba a (leaf bb b (leaf bc c (leaf bd d z)))
 
+        Leaf1 ba a -> leaf ba a z
+        Empty      -> z
 
 {-# INLINE foldrRangeWithKey' #-}
--- | Best-case \(\mathcal{O}(\log n)\), worst-case \(\mathcal{O}(n)\).
+-- | \(\mathcal{O}(r + n_{range})\).
 --   Fold right-to-left over t'MBR's that match the 'Predicate'
 --   and their respective values, applying the operator function strictly.
 foldrRangeWithKey' :: Predicate -> (MBR -> a -> b -> b) -> b -> RTree a -> b
-foldrRangeWithKey' (Predicate nodePred leafPred) f z_ r =
-  case r of
-    Root n     -> go z_ n
-    Leaf1 ba a -> leaf ba a z_
-    Empty      -> z_
+foldrRangeWithKey' (Predicate nodePred leafPred) f = go
   where
     {-# INLINE node #-}
     node z bx x
@@ -1013,11 +954,10 @@ foldrRangeWithKey' (Predicate nodePred leafPred) f z_ r =
       | otherwise   = z
 
     {-# INLINE leaf #-}
-    leaf bx x z
-      | leafPred bx = z `seq` f bx x z
+    leaf bx x !z
+      | leafPred bx = f bx x z
       | otherwise   = z
 
-    {-# NOINLINE go #-}
     go z n =
       case n of
         Node2 ba a bb b           -> node (node             z             bb b) ba a
@@ -1028,18 +968,16 @@ foldrRangeWithKey' (Predicate nodePred leafPred) f z_ r =
         Leaf3 ba a bb b bc c      -> leaf ba a (leaf bb b (leaf bc c            z))
         Leaf4 ba a bb b bc c bd d -> leaf ba a (leaf bb b (leaf bc c (leaf bd d z)))
 
+        Leaf1 ba a                -> leaf ba a z
+        Empty                     -> z
 
-{-# INLINE foldMap #-}
--- | \(\mathcal{O}(n)\).
+
+
+-- | \(\mathcal{O}(n_M)\).
 --   Map each value to a monoid and combine the results.
 foldMap :: Monoid m => (a -> m) -> RTree a -> m
-foldMap f r =
-  case r of
-    Root n    -> go n
-    Leaf1 _ a -> f a
-    Empty     -> mempty
+foldMap f = go
   where
-    {-# NOINLINE go #-}
     go n =
       case n of
         Node2 _  a _  b           -> go a <> go b
@@ -1050,17 +988,15 @@ foldMap f r =
         Leaf3 _  a _  b _  c      -> f a <> f b <> f c
         Leaf4 _  a _  b _  c _  d -> f a <> f b <> f c <> f d
 
-{-# INLINE foldMapWithKey #-}
--- | \(\mathcal{O}(n)\).
+        Leaf1 _ a                 -> f a
+        Empty                     -> mempty
+
+
+-- | \(\mathcal{O}(n_M)\).
 --   Map each t'MBR' and its respective value to a monoid and combine the results.
 foldMapWithKey :: Monoid m => (MBR -> a -> m) -> RTree a -> m
-foldMapWithKey f r =
-  case r of
-    Root n     -> go n
-    Leaf1 ba a -> f ba a
-    Empty      -> mempty
+foldMapWithKey f = go
   where
-    {-# NOINLINE go #-}
     go n =
       case n of
         Node2 _  a _  b           -> go a <> go b
@@ -1071,16 +1007,16 @@ foldMapWithKey f r =
         Leaf3 ba a bb b bc c      -> f ba a <> f bb b <> f bc c
         Leaf4 ba a bb b bc c bd d -> f ba a <> f bb b <> f bc c <> f bd d
 
+        Leaf1 ba a                -> f ba a
+        Empty                     -> mempty
+
+
 {-# INLINE foldMapRangeWithKey #-}
--- | Best-case \(\mathcal{O}(\log n)\), worst-case \(\mathcal{O}(n)\).
+-- | \(\mathcal{O}(r + n_{{range}_M})\).
 --   Map each t'MBR' that matches the 'Predicate' and its respective value to a monoid
 --   and combine the results.
 foldMapRangeWithKey :: Monoid m => Predicate -> (MBR -> a -> m) -> RTree a -> m
-foldMapRangeWithKey (Predicate nodePred leafPred) f r =
-  case r of
-    Root n     -> go n
-    Leaf1 ba a -> leaf ba a
-    Empty      -> mempty
+foldMapRangeWithKey (Predicate nodePred leafPred) f = go
   where
     {-# INLINE node #-}
     node bx x
@@ -1092,7 +1028,6 @@ foldMapRangeWithKey (Predicate nodePred leafPred) f r =
       | leafPred bx = f bx x
       | otherwise   = mempty
 
-    {-# NOINLINE go #-}
     go n =
       case n of
         Node2 ba a bb b           -> node ba a <> node bb b
@@ -1103,6 +1038,9 @@ foldMapRangeWithKey (Predicate nodePred leafPred) f r =
         Leaf3 ba a bb b bc c      -> leaf ba a <> leaf bb b <> leaf bc c
         Leaf4 ba a bb b bc c bd d -> leaf ba a <> leaf bb b <> leaf bc c <> leaf bd d
 
+        Leaf1 ba a                -> leaf ba a
+        Empty                     -> mempty
+
 
 
 {-# INLINE traverse #-}
@@ -1110,13 +1048,8 @@ foldMapRangeWithKey (Predicate nodePred leafPred) f r =
 --   Map each value to an action, evaluate the actions left-to-right and
 --   collect the results.
 traverse :: Applicative f => (a -> f b) -> RTree a -> f (RTree b)
-traverse f r =
-  case r of
-    Root n     -> Root <$> go n
-    Leaf1 ba a -> Leaf1 ba <$> f a
-    Empty      -> pure Empty
+traverse f = go
   where
-    {-# NOINLINE go #-}
     go n =
       case n of
         Node2 ba a bb b           ->
@@ -1143,18 +1076,19 @@ traverse f r =
           liftA2 (\a' b' c' d' -> Leaf4 ba a' bb b' bc c' bd d')
             (f a) (f b) <*> f c <*> f d
 
+        Leaf1 ba a                ->
+          Leaf1 ba <$> f a
+
+        Empty                     -> pure Empty
+
+
 {-# INLINE traverseWithKey #-}
 -- | \(\mathcal{O}(n)\).
 --   Map each t'MBR' and its respective value to an action,
 --   evaluate the actions left-to-right and collect the results.
 traverseWithKey :: Applicative f => (MBR -> a -> f b) -> RTree a -> f (RTree b)
-traverseWithKey f r =
-  case r of
-    Root n     -> Root <$> go n
-    Leaf1 ba a -> Leaf1 ba <$> f ba a
-    Empty      -> pure Empty
+traverseWithKey f = go
   where
-    {-# NOINLINE go #-}
     go n =
       case n of
         Node2 ba a bb b           ->
@@ -1181,17 +1115,19 @@ traverseWithKey f r =
           liftA2 (\a' b' c' d' -> Leaf4 ba a' bb b' bc c' bd d')
             (f ba a) (f bb b) <*> f bc c <*> f bd d
 
+        Leaf1 ba a                ->
+          Leaf1 ba <$> f ba a
+
+        Empty                     -> pure Empty
+
+
 {-# INLINE traverseRangeWithKey #-}
--- | Best-case \(\mathcal{O}(\log n)\), worst-case \(\mathcal{O}(n)\).
+-- | \(\mathcal{O}(r + n_{range})\).
 --   Map each t'MBR' that matches the 'Predicate' and its respective value to an action,
 --   evaluate the actions left-to-right and collect the results.
 traverseRangeWithKey
   :: Applicative f => Predicate -> (MBR -> a -> f a) -> RTree a -> f (RTree a)
-traverseRangeWithKey (Predicate nodePred leafPred) f r =
-  case r of
-    Root n     -> Root <$> go n
-    Leaf1 ba a -> Leaf1 ba <$> leaf ba a
-    Empty      -> pure Empty
+traverseRangeWithKey (Predicate nodePred leafPred) f = go
   where
     {-# INLINE node #-}
     node bx x
@@ -1203,7 +1139,6 @@ traverseRangeWithKey (Predicate nodePred leafPred) f r =
       | leafPred bx = f bx x
       | otherwise   = pure x
 
-    {-# NOINLINE go #-}
     go n =
       case n of
         Node2 ba a bb b           ->
@@ -1230,6 +1165,11 @@ traverseRangeWithKey (Predicate nodePred leafPred) f r =
           liftA2 (\a' b' c' d' -> Leaf4 ba a' bb b' bc c' bd d')
             (leaf ba a) (leaf bb b) <*> leaf bc c <*> leaf bd d
 
+        Leaf1 ba a                ->
+          Leaf1 ba <$> leaf ba a
+
+        Empty                     -> pure Empty
+
 
 
 {-# INLINE union3MBR #-}
@@ -1242,29 +1182,23 @@ union4MBR ba bb bc bd = unionMBR (unionMBR ba bb) (unionMBR bc bd)
 
 
 
-data Gut a = GutOne MBR (Node a)
-           | GutTwo MBR (Node a) MBR (Node a)
+data Gut a = GutOne MBR (RTree a)
+           | GutTwo MBR (RTree a) MBR (RTree a)
 
 -- | \(\mathcal{O}(\log n)\). Insert a value into the tree.
---
---   This function does not evaluate the value to WHNF.
 --
 --   'insertGut' uses the R-tree insertion algorithm with quadratic-cost splits.
 --   Compared to 'insert' the resulting trees are of lower quality (see the
 --   [Wikipedia article](https://en.wikipedia.org/w/index.php?title=R*-tree&oldid=1171720351#Performance)
 --   for a graphic example).
 insertGut :: MBR -> a -> RTree a -> RTree a
-insertGut bx x s =
-  case s of
-    Root n     -> Root $ case insertGutRoot bx x n of
-                           GutOne _ o       -> o
-                           GutTwo bl l br r -> Node2 bl l br r
-
-    Leaf1 ba a -> Root (Leaf2 ba a bx x)
-    Empty      -> Leaf1 bx x
+insertGut bx x t =
+  case insertGutRoot bx x t of
+    GutOne _ o       -> o
+    GutTwo bl l br r -> Node2 bl l br r
 
 
-insertGutRoot :: MBR -> a -> Node a -> Gut a
+insertGutRoot :: MBR -> a -> RTree a -> Gut a
 insertGutRoot bx x n =
   case n of
     Node2 ba a bb b           ->
@@ -1313,11 +1247,16 @@ insertGutRoot bx x n =
         Q3R (L2 bl' bm m bo o) (L3 br' bp p bq q bs s) ->
           GutTwo bl' (Leaf2 bm m bo o) br' (Leaf3 bp p bq q bs s)
 
-{-# INLINE insertGut_ #-}
-insertGut_ :: MBR -> a -> MBR -> Node a -> Gut a
+    Leaf1 ba a                ->
+      GutOne (unionMBR ba bx) (Leaf2 ba a bx x)
+
+    Empty                     ->
+      GutOne bx (Leaf1 bx x)
+
+
+insertGut_ :: MBR -> a -> MBR -> RTree a -> Gut a
 insertGut_ bx x = go
   where
-    {-# NOINLINE go #-}
     go bn n =
      case n of
        Node2 ba a bb b           ->
@@ -1366,9 +1305,15 @@ insertGut_ bx x = go
            Q3R (L2 bl' bm m bo o) (L3 br' bp p bq q bs s) ->
              GutTwo bl' (Leaf2 bm m bo o) br' (Leaf3 bp p bq q bs s)
 
+       Leaf1 ba a                ->
+         GutOne (unionMBR ba bn) (Leaf2 ba a bx x)
+
+       Empty                     ->
+         GutOne bn (Leaf1 bx x)
 
 
-insertGutRootNode :: MBR -> Node a -> Int -> Node a -> Gut a
+
+insertGutRootNode :: MBR -> RTree a -> Int -> RTree a -> Gut a
 insertGutRootNode bx x depth n =
   case n of
     Node2 ba a bb b
@@ -1421,14 +1366,13 @@ insertGutRootNode bx x depth n =
                      GutTwo bl' (Node2 bm m bo o) br' (Node3 bp p bq q bs s)
 
     _ -> assert False
-           (errorWithoutStackTrace "Data.RTree.Float.Strict.Internal.insertGutRootNode: reached a leaf")
+           (errorWithoutStackTrace "Data.RTree.D2.Float.Internal.insertGutRootNode: reached a leaf")
                  n
 
 {-# INLINE insertGutNode #-}
-insertGutNode :: MBR -> Node a -> Int -> MBR -> Node a -> Gut a
+insertGutNode :: MBR -> RTree a -> Int -> MBR -> RTree a -> Gut a
 insertGutNode bx x = go
   where
-    {-# NOINLINE go #-}
     go depth bn n =
       case n of
         Node2 ba a bb b
@@ -1481,7 +1425,7 @@ insertGutNode bx x = go
                          GutTwo bl' (Node2 bm m bo o) br' (Node3 bp p bq q bs s)
 
         _ -> assert False
-               (errorWithoutStackTrace "Data.RTree.Float.Strict.Internal.insertGutNode: reached a leaf")
+               (errorWithoutStackTrace "Data.RTree.D2.Float.Internal.insertGutNode: reached a leaf")
                n
 
 
@@ -1676,27 +1620,18 @@ distribute1 q bx x =
 
 
 
+data Carry a = CarryLeaf MBR a
+             | CarryNode Int MBR (RTree a)
+
+data Ins a = InsOne MBR (RTree a)
+           | InsCarry Word (Carry a) MBR (RTree a)
+           | InsTwo Word MBR (RTree a) MBR (RTree a)
+
 -- | \(\mathcal{O}(\log n)\). Insert a value into the tree.
---
---   This function does not evaluate the value to WHNF.
 --
 --   'insert' uses the R*-tree insertion algorithm.
 insert :: MBR -> a -> RTree a -> RTree a
-insert bx x s =
-  case s of
-    Root n     -> Root (insertRoot bx x n)
-    Leaf1 ba a -> Root (Leaf2 ba a bx x)
-    Empty      -> Leaf1 bx x
-
-data Carry a = CarryLeaf MBR a
-             | CarryNode Int MBR (Node a)
-
-data Ins a = InsOne MBR (Node a)
-           | InsCarry Word (Carry a) MBR (Node a)
-           | InsTwo Word MBR (Node a) MBR (Node a)
-
-insertRoot :: MBR -> a -> Node a -> Node a
-insertRoot bx x n =
+insert bx x n =
   case n of
     Node2 ba a bb b           ->
       let add f bg g bh h =
@@ -1765,12 +1700,14 @@ insertRoot bx x n =
         Q3R (L2 bl bu u bv v) (L3 br bw w by y bz z) ->
           Node2 bl (Leaf2 bu u bv v) br (Leaf3 bw w by y bz z)
 
+    Leaf1 ba a                -> Leaf2 ba a bx x
+    Empty                     -> Leaf1 bx x
 
-{-# INLINE insert_ #-}
-insert_ :: Word -> MBR -> a -> Int -> MBR -> Node a -> Ins a
+
+
+insert_ :: Word -> MBR -> a -> Int -> MBR -> RTree a -> Ins a
 insert_ mask bx x = go
   where
-    {-# NOINLINE go #-}
     go height bn n =
       case n of
         Node2 ba a bb b           ->
@@ -1846,12 +1783,16 @@ insert_ mask bx x = go
                  in InsCarry (mask .|. bit_) (CarryLeaf bz z)
                       (union4MBR bu bv bw by) (Leaf4 bu u bv v bw w by y)
 
+        Leaf1 ba a               ->
+          InsOne (unionMBR ba bx) (Leaf2 ba a bx x)
 
-{-# INLINE insertNode #-}
-insertNode :: Word -> Int -> MBR -> Node a -> Int -> MBR -> Node a -> Ins a
+        Empty                    ->
+          InsOne bx (Leaf1 bx x)
+
+
+insertNode :: Word -> Int -> MBR -> RTree a -> Int -> MBR -> RTree a -> Ins a
 insertNode mask depth bx x = go
   where
-    {-# NOINLINE go #-}
     go height bn n =
       case n of
         Node2 ba a bb b
@@ -1933,7 +1874,7 @@ insertNode mask depth bx x = go
 
 
         _ -> assert False
-               (errorWithoutStackTrace "Data.RTree.Float.Strict.Internal.insertNode: reached a leaf")
+               (errorWithoutStackTrace "Data.RTree.D2.Float.Internal.insertNode: reached a leaf")
                n
 
 
@@ -2036,20 +1977,12 @@ margins (L3 bw _ _ _ _ _ _, L2 bx _ _ _ _, L2 by _ _ _ _, L3 bz _ _ _ _ _ _) =
 --   'delete' uses the R-tree deletion algorithm with quadratic-cost splits.
 delete :: MBR -> RTree a -> RTree a
 delete bx s =
-  case s of
-    Root n     -> case delete_ bx 0 n of
-                    DelOne _ o     -> Root o
-                    DelNone        -> s
-                    DelSome re _ o -> Root (reintegrate 0 o re)
-                    DelRe re       -> reconstruct re
-
-    Leaf1 ba _ | eqMBR bx ba -> Empty
-               | otherwise   -> s
-
-    Empty      -> Empty
-
+  case delete_ bx 0 s of
+    DelOne _ o     -> o
+    DelNone        -> s
+    DelSome re _ o -> reintegrate 0 o re
+    DelRe re       -> reconstruct re
   where
-    {-# NOINLINE reintegrate #-}
     reintegrate height n re =
       case re of
         ReCons depth ba a re' ->
@@ -2065,19 +1998,19 @@ delete bx s =
     {-# INLINE reconstruct #-}
     reconstruct re =
       case re of
-        ReCons _ _ n re' -> Root (reintegrate (-1) n re')
+        ReCons _ _ n re' -> reintegrate (-1) n re'
         ReLeaf ba a      -> Leaf1 ba a
 
-data Re a = ReCons Int MBR (Node a) (Re a)
+data Re a = ReCons Int MBR (RTree a) (Re a)
           | ReLeaf MBR a
 
 data Del a = DelNone
-           | DelOne MBR (Node a)
-           | DelSome (Re a) MBR (Node a)
+           | DelOne MBR (RTree a)
+           | DelSome (Re a) MBR (RTree a)
            | DelRe (Re a)
 
 {-# INLINE delete_ #-}
-delete_ :: MBR -> Int -> Node a -> Del a
+delete_ :: MBR -> Int -> RTree a -> Del a
 delete_ bx = go
   where
     {-# INLINE cut2 #-}
@@ -2128,7 +2061,6 @@ delete_ bx = go
       | eqMBR ba bx = DelOne (union3MBR bb bc bd) (Leaf3 bb b bc c bd d)
       | otherwise   = next
 
-    {-# NOINLINE go #-}
     go depth n =
       case n of
         Node2 ba a bb b ->
@@ -2173,6 +2105,12 @@ delete_ bx = go
 
           in dela
 
+        Leaf1 ba _ | eqMBR bx ba -> DelOne ba Empty
+                   | otherwise   -> DelNone
+
+        Empty      -> DelNone
+
+
 
 
 quotCeil :: Int -> Int -> Int
@@ -2187,14 +2125,12 @@ slices r = ceiling (sqrt (fromIntegral (quotCeil r 4)) :: Float)
 partition1 :: Int -> [a] -> [(Int, [a])]
 partition1 n_ = go
   where
-    {-# NOINLINE go #-}
     go xs =
       let ~(n, before, after) = splitAt1 0 xs
       in (n, before) : case after of
                          _:_ -> go after
                          []  -> []
 
-    {-# NOINLINE splitAt1 #-}
     splitAt1 n xs =
       case xs of
         []   -> (n, [], [])
@@ -2207,13 +2143,13 @@ partition1 n_ = go
 
 
 
--- | \(\mathcal{O}(n \cdot \log n)\). Bulk-load a tree.
+-- | \(\mathcal{O}(n \log n)\). Bulk-load a tree.
 --
 --   'bulkSTR' uses the Sort-Tile-Recursive algorithm.
 bulkSTR :: [(MBR, a)] -> RTree a
 bulkSTR xs =
   case xs of
-    _:_:_     -> Root . snd $ vertically (length xs) xs
+    _:_:_     -> snd $ vertically (length xs) xs
     [(ba, a)] -> Leaf1 ba a
     []        -> Empty
   where
@@ -2247,7 +2183,7 @@ bulkSTR xs =
 
     compress [] =
       errorWithoutStackTrace
-        "Data.RTree.Float.Strict.Internal.bulkSTR: zero-sized partition"
+        "Data.RTree.D2.Float.Internal.bulkSTR: zero-sized partition"
 
     mend (ba, a) (bb, b) cs =
       case cs of
@@ -2279,4 +2215,4 @@ bulkSTR xs =
           (unionMBR ba bb, Leaf2 ba a bb b)
 
         _ -> errorWithoutStackTrace
-               "Data.RTree.Float.Strict.Internal.bulkSTR: malformed leaf"
+               "Data.RTree.D2.Float.Internal.bulkSTR: malformed leaf"

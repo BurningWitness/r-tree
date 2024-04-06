@@ -1,12 +1,7 @@
-{-# LANGUAGE MagicHash
-           , PatternSynonyms
-           , UnboxedTuples
-           , ViewPatterns #-}
-
 {-# OPTIONS_HADDOCK not-home #-}
 
 {- |
-     Module     : Data.RTree.Float.Strict.Unsafe
+     Module     : Data.RTree.D2.Float.Unsafe
      Copyright  : Copyright (c) 2015, Birte Wagner, Sebastian Philipp
                   Copyright (c) 2022, Oleksii Divak
      License    : MIT
@@ -18,9 +13,18 @@
      Underlying implementation of the 'RTree'.
 -}
 
-module Data.RTree.Float.Strict.Unsafe
-  ( -- * MBR
-    MBR (MBR, UnsafeMBR)
+module Data.RTree.D2.Float.Unsafe
+  ( MBR (MBR, UnsafeMBR)
+
+    -- | === R-tree
+    --   
+    --   Each t'MBR' is tied to the value directly after it.
+    --
+    --   Invariant: the t'MBR' of each non-leaf node encloses
+    --              all the t'MBR's inside the node.
+  , RTree (..)
+
+    -- * Common operations
   , validMBR
   , eqMBR
   , unionMBR
@@ -32,12 +36,8 @@ module Data.RTree.Float.Strict.Unsafe
   , intersectionMBR
   , intersectionMBR'
 
-    -- * Predicate
+    -- * Range
   , Predicate (..)
-
-    -- * R-Tree
-  , RTree (..)
-  , Node (..)
   ) where
 
-import           Data.RTree.Float.Strict.Internal
+import           Data.RTree.D2.Float.Internal

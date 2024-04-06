@@ -4,8 +4,8 @@
 
 module Main where
 
-import           Data.RTree.Double.Strict (RTree, MBR, Predicate)
-import qualified Data.RTree.Double.Strict as R
+import           Data.RTree.D2.Double (RTree, MBR, Predicate)
+import qualified Data.RTree.D2.Double as R
 
 import           Control.DeepSeq
 import           Control.Monad
@@ -80,7 +80,7 @@ map cat from name pre =
       ) $ \ ~(r, brs) ->
     bench (cat <> "/map/" <> name) $
       flip nf brs $
-             fmap $ \x -> [R.mapRangeWithKey (pre x) (\_ -> (+) 1) r]
+             fmap $ \x -> [R.adjustRangeWithKey (pre x) (\_ -> (+) 1) r]
 
 traversal
   :: String -> ([(MBR, Int)] -> RTree Int)

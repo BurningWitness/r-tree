@@ -1,10 +1,10 @@
 module Main where
 
-import           Test.RTree.Double.Strict
+import qualified Test.RTree.D2.Double as R2
 
 import           Test.Hspec
 
 
 
 main :: IO ()
-main = hspec rtreeT
+main = hspec R2.test

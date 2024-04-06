@@ -1,5 +1,7 @@
+{-# LANGUAGE PatternSynonyms #-}
+
 {- |
-     Module     : Data.RTree.Double.Strict
+     Module     : Data.RTree.D2.Double
      Copyright  : Copyright (c) 2015, Birte Wagner, Sebastian Philipp
                   Copyright (c) 2022, Oleksii Divak
      License    : MIT
@@ -8,7 +10,7 @@
      Stability  : experimental
      Portability: not portable
 
-     @'RTree' a@ represents a two-dimensional spatial tree
+     @'RTree' a@ is a spine-strict two-dimensional spatial tree
      from bounding rectangles of type 'Double' to values of type @a@.
 
      R-trees have no notion of element order, as such:
@@ -23,14 +25,21 @@
 
      == Laziness
 
-     Evaluating the root of the tree (i.e. @(_ :: 'RTree' a)@) to WHNF evaluates the entire
-     spine of the tree to normal form. This does not apply to values however, as such
-     care must be taken to evaluate values properly before inserting them.
+     Evaluating the root of the tree (i.e. @(_ :: 'RTree' a)@) to WHNF
+     evaluates the entire spine of the tree to normal form.
+
+     Functions do not perform any additional evaluations unless
+     their documentation directly specifies so.
 
      == Performance
 
-     Unless noted otherwise, operation complexity specified is worst-case.
+     Each function's time complexity is provided in the documentation.
+     
      \(n\) refers to the total number of entries in the tree.
+
+     \(r\) refers to the time complexity of the chosen 'Predicate' lookup,
+     ranging from \(\mathcal{O}(\log n)\) (well-balanced)
+     to \(\mathcal{O}(n)\) (worst-case) depending on tree quality.
 
      == Implementation
 
@@ -53,46 +62,27 @@
          <https://ia800900.us.archive.org/27/items/nasa_techdoc_19970016975/19970016975.pdf>
 -}
 
-module Data.RTree.Double.Strict
+module Data.RTree.D2.Double
   ( MBR (MBR)
   , RTree
 
-    -- * Construction
+    -- * Construct
   , empty
   , singleton
 
-    -- * Queries
-    -- ** Value-only
-    -- *** Map
-  , Data.RTree.Double.Strict.Internal.map
-  , map'
+    -- ** Bulk-loading
+  , bulkSTR
 
-    -- *** Fold
-  , Data.RTree.Double.Strict.Internal.foldl
-  , Data.RTree.Double.Strict.Internal.foldr
-  , Data.RTree.Double.Strict.Internal.foldMap
-  , Data.RTree.Double.Strict.Internal.foldl'
-  , Data.RTree.Double.Strict.Internal.foldr'
+    -- * Single-key
+    -- ** Insert
+  , insert
+  , insertGut
 
-    -- *** Traversal
-  , Data.RTree.Double.Strict.Internal.traverse
+    -- ** Delete
+  , delete
 
-    -- ** MBR/value
-    -- *** Map
-  , mapWithKey
-  , mapWithKey'
-
-    -- *** Fold
-  , foldlWithKey
-  , foldrWithKey
-  , foldMapWithKey
-  , foldlWithKey'
-  , foldrWithKey'
-
-    -- *** Traversal
-  , traverseWithKey
-
-    -- ** Range
+    -- * Range
+    -- | NOTE: both 'Predicate's and functions using them inline heavily.
   , Predicate
   , equals
   , intersects
@@ -102,39 +92,63 @@ module Data.RTree.Double.Strict
   , containedBy
   , containedBy'
 
-    -- *** Map
-  , mapRangeWithKey
-  , mapRangeWithKey'
+    -- ** Map
+  , adjustRangeWithKey
+  , adjustRangeWithKey'
 
-    -- *** Fold
+    -- ** Fold
   , foldlRangeWithKey
   , foldrRangeWithKey
   , foldMapRangeWithKey
   , foldlRangeWithKey'
   , foldrRangeWithKey'
 
-    -- *** Traversal
+    -- ** Traverse
   , traverseRangeWithKey
 
-    -- * Insertion
-  , insert
-  , insertGut
+    -- * Full tree
+    -- ** Size
+  , Data.RTree.D2.Double.Internal.null
+  , size
 
-    -- * Deletion
-  , delete
+    -- ** Map
+  , Data.RTree.D2.Double.Internal.map
+  , map'
+  , mapWithKey
+  , mapWithKey'
 
-    -- * Bulk-loading
-  , bulkSTR
+    -- ** Fold
+    -- | === Left-to-right
+  , Data.RTree.D2.Double.Internal.foldl
+  , Data.RTree.D2.Double.Internal.foldl'
+  , foldlWithKey
+  , foldlWithKey'
+
+    -- | === Right-to-left
+  , Data.RTree.D2.Double.Internal.foldr
+  , Data.RTree.D2.Double.Internal.foldr'
+  , foldrWithKey
+  , foldrWithKey'
+
+    -- | === Monoid
+  , Data.RTree.D2.Double.Internal.foldMap
+  , foldMapWithKey
+
+    -- ** Traverse
+  , Data.RTree.D2.Double.Internal.traverse
+  , traverseWithKey
   ) where
 
-import           Data.RTree.Double.Strict.Internal
+import           Data.RTree.D2.Double.Internal
 
 
 
--- | \(\mathcal{O}(1)\). Empty R-tree.
+-- | \(\mathcal{O}(1)\).
+--   Empty tree.
 empty :: RTree a
 empty = Empty
 
--- | \(\mathcal{O}(1)\). R-tree with a single entry.
+-- | \(\mathcal{O}(1)\).
+--   Tree with a single entry.
 singleton :: MBR -> a -> RTree a
 singleton = Leaf1

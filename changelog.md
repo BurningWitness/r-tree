@@ -1,4 +1,4 @@
-## 1.1.0
+## 1.2.0
 
 Proper rewrite of the library.
 Additions are not listed, only the most important changes are.
@@ -19,32 +19,35 @@ Additions are not listed, only the most important changes are.
 
 * `RTree`:
 
-  - `Data.RTree` is now called `Data.RTree.*.Strict`;
+  - `Data.RTree` is now called `Data.RTree.D2.Double`;
 
-  - Internals are now exposed in `Data.RTree.*.Strict.Unsafe`;
+  - Internals are now exposed in `Data.RTree.D2.Double.Unsafe`;
 
   - `Binary`, `Generic`, `Monoid` and `Semigroup` instances were removed;
 
   - `insertWith`, `union`, `unionWith` and `mapMaybe`,
     `fromList`, `toList`, `keys` and `values` were removed;
 
-  - `length` and `null` are now only accessible from the `Foldable` typeclass;
+  - `length` is now named `size`;
 
   - Conversions between lookup functions:
 
-    - `lookup` is `\ba -> getFirst . foldMap (equals ba) (First . Just)`;
+    - `lookup` is `\ba -> foldrRangeWithKey (equals ba) (\_ x _ -> Just x) Nothing`;
 
-    - `intersect` is `\ba -> foldMap (intersects ba) pure`;
+    - `intersect` is `\ba -> foldrRangeWithKey (intersects ba) (\_ -> (:)) []`;
 
-    - `intersectWithKey` is `\ba -> foldMapWithKey (intersects ba) pure`;
+    - `intersectWithKey` is
+      `\ba -> foldrRangeWithKey (intersects ba) (\bx x -> (:) (bx, x)) []`;
 
-    - `lookupRange` is `\ba -> foldMap (contains ba) pure`;
+    - `lookupRange` is `\ba -> foldrRangeWithKey (containedBy ba) (\_ -> (:)) []`;
 
-    - `lookupRangeWithKey` is `\ba -> foldMapWithKey (contains ba) pure`;
+    - `lookupRangeWithKey` is
+      `\ba -> foldrRangeWithKey (containedBy ba) (\bx x -> (:) (bx, x)) []`;
 
-    - `lookupContainsRange` is `\ba -> foldMap (containedBy ba) pure`;
+    - `lookupContainsRange` is `\ba -> foldrRangeWithKey (contains ba) (\_ -> (:)) []`;
 
-    - `lookupContainsRangeWithKey` is `\ba -> foldMapWithKey (containedBy ba) pure`;
+    - `lookupContainsRangeWithKey` is
+      `\ba -> foldrRangeWithKey (contains ba) (\bx x -> (:) (bx, x)) []`;
 
 ## 0.6.0
 

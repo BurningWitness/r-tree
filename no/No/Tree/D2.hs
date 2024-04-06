@@ -6,9 +6,9 @@
      Every fold/map is \(O (n)\).
 -}
 
-module Data.NoTree.Strict where
+module No.Tree.D2 where
 
-import           Data.RTree.Double.Strict.Unsafe (MBR (..), Predicate (..))
+import           Data.RTree.D2.Double.Unsafe (MBR (..), Predicate (..))
 
 import           Control.DeepSeq
 import qualified Data.Foldable as Fold
@@ -70,8 +70,8 @@ delete ba no = let (xs, ys) = break ((== ba) . fst) $ toList no
 mapWithKey :: (MBR -> a -> b) -> NoTree a -> NoTree b
 mapWithKey f = NoTree . fmap (\ ~(ba, a) -> (ba, f ba a) ) . toList
 
-mapRangeWithKey :: Predicate -> (MBR -> a -> a) -> NoTree a -> NoTree a
-mapRangeWithKey (Predicate _ checkLeaf) f =
+adjustRangeWithKey :: Predicate -> (MBR -> a -> a) -> NoTree a -> NoTree a
+adjustRangeWithKey (Predicate _ checkLeaf) f =
   NoTree . fmap (\(ba, a) -> (ba, opt ba a)) . toList
   where
     opt ba a | checkLeaf ba = f ba a
